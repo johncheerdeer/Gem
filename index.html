@@ -43,6 +43,13 @@
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        .message-wrapper {
+            display: flex;
+            justify-content: flex-start;
+        }
+        .user-wrapper {
+            justify-content: flex-end;
+        }
         .message {
             max-width: 80%;
             padding: 0.75rem 1rem;
@@ -214,7 +221,7 @@
 
         <!-- Chat messages -->
         <div id="chat-messages" class="flex-1 p-4 overflow-y-auto">
-            <div class="bot-message message">Hello!</div>
+            <div class="message bot-message">Hello!</div>
         </div>
 
         <!-- Loading indicator -->
@@ -236,7 +243,7 @@
                 <input type="file" id="file-input" class="hidden" accept="image/*">
                 <button id="send-button">Send</button>
             </div>
-            <div id="preview-container" class="hidden"></div>
+            <div id="preview-container" class="hidden mt-2"></div>
         </div>
     </div>
 
@@ -266,7 +273,7 @@
         const modalCloseBtn = document.getElementById('modal-close-btn');
         const newChatButton = document.getElementById('new-chat-button');
 
-        let chatHistory = [];
+        let chatHistory = [{ role: 'model', parts: [{ text: 'Hello!' }] }];
         let uploadedImage = null;
 
         // Function to create a new message element
@@ -274,22 +281,29 @@
             const messageElement = document.createElement('div');
             messageElement.classList.add('message');
             messageElement.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
-
+            
             if (typeof content === 'string') {
                 messageElement.textContent = content;
-            } else if (content.type === 'image') {
-                const img = new Image();
-                img.src = content.data;
-                img.classList.add('image-preview');
-                messageElement.appendChild(img);
-                const textPart = document.createElement('div');
-                textPart.textContent = content.text;
-                messageElement.appendChild(textPart);
+            } else {
+                if (content.data) {
+                    const img = new Image();
+                    img.src = content.data;
+                    img.classList.add('w-full', 'rounded-lg', 'mb-2', 'max-h-64', 'object-contain', 'bg-white', 'p-1', 'shadow');
+                    messageElement.appendChild(img);
+                }
+                if (content.text) {
+                    const textPart = document.createElement('div');
+                    textPart.textContent = content.text;
+                    messageElement.appendChild(textPart);
+                }
             }
 
             chatMessages.appendChild(messageElement);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
+        
+        // Initial message display
+        createMessageElement('Hello!', 'bot');
 
         // Handle file upload
         uploadButton.addEventListener('click', () => fileInput.click());
@@ -317,11 +331,11 @@
             previewContainer.innerHTML = '';
             const img = new Image();
             img.src = dataUrl;
-            img.classList.add('image-preview');
+            img.classList.add('w-20', 'h-20', 'rounded-lg', 'object-cover', 'mr-2');
 
             const removeBtn = document.createElement('div');
             removeBtn.classList.add('remove-image-btn');
-            removeBtn.textContent = 'x';
+            removeBtn.innerHTML = '&times;';
             removeBtn.addEventListener('click', () => {
                 uploadedImage = null;
                 previewContainer.innerHTML = '';
@@ -343,28 +357,28 @@
             const userText = userInput.value.trim();
             if (userText === '' && !uploadedImage) return;
 
+            // Create a temporary placeholder for user message
+            const userMessageContent = { text: userText, data: uploadedImage ? `data:${uploadedImage.mimeType};base64,${uploadedImage.data}` : null };
+            createMessageElement(userMessageContent, 'user');
+            
+            // Construct the parts for the Gemini API call
+            const parts = [];
+            if (userText) {
+                parts.push({ text: userText });
+            }
             if (uploadedImage) {
-                createMessageElement({ type: 'image', data: `data:${uploadedImage.mimeType};base64,${uploadedImage.data}`, text: userText }, 'user');
-            } else {
-                createMessageElement(userText, 'user');
+                parts.push({ inlineData: { mimeType: uploadedImage.mimeType, data: uploadedImage.data } });
             }
 
+            // Push the user's message to chat history
+            chatHistory.push({ role: 'user', parts: parts });
+
+            // Clear input and show loading indicator
             userInput.value = '';
             loadingIndicator.style.display = 'flex';
             sendButton.disabled = true;
             
-            const payload = { contents: [] };
-
-            if (uploadedImage) {
-                payload.contents = [{
-                    parts: [
-                        { text: userText || "What is in this image?" },
-                        { inlineData: { mimeType: uploadedImage.mimeType, data: uploadedImage.data } }
-                    ]
-                }];
-            } else {
-                payload.contents = [{ parts: [{ text: userText }] }];
-            }
+            const payload = { contents: chatHistory };
 
             try {
                 const response = await fetch(apiUrl, {
@@ -373,10 +387,14 @@
                     body: JSON.stringify(payload)
                 });
                 const result = await response.json();
-                const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+                const botResponseParts = result?.candidates?.[0]?.content?.parts;
 
-                if (text) {
-                    createMessageElement(text, 'bot');
+                if (botResponseParts) {
+                    const botResponseText = botResponseParts.map(part => part.text).join(' ');
+                    createMessageElement(botResponseText, 'bot');
+                    
+                    // Add the bot's response to the chat history
+                    chatHistory.push({ role: 'model', parts: [{ text: botResponseText }] });
                 } else {
                     createMessageElement("Sorry, I couldn't generate a response. Please try again.", 'bot');
                 }
@@ -395,8 +413,9 @@
 
         // Handle new chat
         newChatButton.addEventListener('click', () => {
-            chatMessages.innerHTML = '<div class="bot-message message">Hello!</div>';
-            chatHistory = [];
+            chatMessages.innerHTML = '';
+            chatHistory = [{ role: 'model', parts: [{ text: 'Hello!' }] }];
+            createMessageElement('Hello!', 'bot');
             uploadedImage = null;
             previewContainer.innerHTML = '';
             previewContainer.classList.add('hidden');
