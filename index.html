@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>gem</title>
+    <title>AI Chatbot</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -42,13 +42,6 @@
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
-        }
-        .message-wrapper {
-            display: flex;
-            justify-content: flex-start;
-        }
-        .user-wrapper {
-            justify-content: flex-end;
         }
         .message {
             max-width: 80%;
@@ -215,13 +208,13 @@
     <div id="chat-container">
         <!-- Chat header -->
         <div class="flex items-center justify-between p-4 bg-blue-500 text-white rounded-t-2xl">
-            <h1 class="text-xl font-bold">gem</h1>
+            <h1 class="text-xl font-bold">Gemini Chatbot</h1>
             <button id="new-chat-button" class="new-chat-btn text-sm">New Chat</button>
         </div>
 
         <!-- Chat messages -->
         <div id="chat-messages" class="flex-1 p-4 overflow-y-auto">
-            <div class="message bot-message">Hello!</div>
+            <div class="bot-message message">Hello! I'm an AI assistant. How can I help you today? You can also upload an image for me to analyze.</div>
         </div>
 
         <!-- Loading indicator -->
@@ -243,7 +236,7 @@
                 <input type="file" id="file-input" class="hidden" accept="image/*">
                 <button id="send-button">Send</button>
             </div>
-            <div id="preview-container" class="hidden mt-2"></div>
+            <div id="preview-container" class="hidden"></div>
         </div>
     </div>
 
@@ -273,7 +266,7 @@
         const modalCloseBtn = document.getElementById('modal-close-btn');
         const newChatButton = document.getElementById('new-chat-button');
 
-        let chatHistory = [{ role: 'model', parts: [{ text: 'Hello!' }] }];
+        let chatHistory = [];
         let uploadedImage = null;
 
         // Function to create a new message element
@@ -281,29 +274,22 @@
             const messageElement = document.createElement('div');
             messageElement.classList.add('message');
             messageElement.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
-            
+
             if (typeof content === 'string') {
                 messageElement.textContent = content;
-            } else {
-                if (content.data) {
-                    const img = new Image();
-                    img.src = content.data;
-                    img.classList.add('w-full', 'rounded-lg', 'mb-2', 'max-h-64', 'object-contain', 'bg-white', 'p-1', 'shadow');
-                    messageElement.appendChild(img);
-                }
-                if (content.text) {
-                    const textPart = document.createElement('div');
-                    textPart.textContent = content.text;
-                    messageElement.appendChild(textPart);
-                }
+            } else if (content.type === 'image') {
+                const img = new Image();
+                img.src = content.data;
+                img.classList.add('image-preview');
+                messageElement.appendChild(img);
+                const textPart = document.createElement('div');
+                textPart.textContent = content.text;
+                messageElement.appendChild(textPart);
             }
 
             chatMessages.appendChild(messageElement);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
-        
-        // Initial message display
-        createMessageElement('Hello!', 'bot');
 
         // Handle file upload
         uploadButton.addEventListener('click', () => fileInput.click());
@@ -331,11 +317,11 @@
             previewContainer.innerHTML = '';
             const img = new Image();
             img.src = dataUrl;
-            img.classList.add('w-20', 'h-20', 'rounded-lg', 'object-cover', 'mr-2');
+            img.classList.add('image-preview');
 
             const removeBtn = document.createElement('div');
             removeBtn.classList.add('remove-image-btn');
-            removeBtn.innerHTML = '&times;';
+            removeBtn.textContent = 'x';
             removeBtn.addEventListener('click', () => {
                 uploadedImage = null;
                 previewContainer.innerHTML = '';
@@ -357,28 +343,31 @@
             const userText = userInput.value.trim();
             if (userText === '' && !uploadedImage) return;
 
-            // Create a temporary placeholder for user message
-            const userMessageContent = { text: userText, data: uploadedImage ? `data:${uploadedImage.mimeType};base64,${uploadedImage.data}` : null };
-            createMessageElement(userMessageContent, 'user');
-            
-            // Construct the parts for the Gemini API call
-            const parts = [];
-            if (userText) {
-                parts.push({ text: userText });
-            }
             if (uploadedImage) {
-                parts.push({ inlineData: { mimeType: uploadedImage.mimeType, data: uploadedImage.data } });
+                createMessageElement({ type: 'image', data: `data:${uploadedImage.mimeType};base64,${uploadedImage.data}`, text: userText }, 'user');
+            } else {
+                createMessageElement(userText, 'user');
             }
 
-            // Push the user's message to chat history
-            chatHistory.push({ role: 'user', parts: parts });
-
-            // Clear input and show loading indicator
             userInput.value = '';
             loadingIndicator.style.display = 'flex';
             sendButton.disabled = true;
             
-            const payload = { contents: chatHistory };
+            const payload = { contents: [] };
+
+            if (uploadedImage) {
+                payload.contents = [{
+                    parts: [
+                        { text: userText || "What is in this image?" },
+                        { inlineData: { mimeType: uploadedImage.mimeType, data: uploadedImage.data } }
+                    ]
+                }];
+            } else {
+                payload.contents = [{ parts: [{ text: userText }] }];
+            }
+
+            // Log the request payload for debugging
+            console.log("Sending request to API:", JSON.stringify(payload, null, 2));
 
             try {
                 const response = await fetch(apiUrl, {
@@ -386,15 +375,16 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const result = await response.json();
-                const botResponseParts = result?.candidates?.[0]?.content?.parts;
 
-                if (botResponseParts) {
-                    const botResponseText = botResponseParts.map(part => part.text).join(' ');
-                    createMessageElement(botResponseText, 'bot');
-                    
-                    // Add the bot's response to the chat history
-                    chatHistory.push({ role: 'model', parts: [{ text: botResponseText }] });
+                // Log the raw response status
+                console.log("API response status:", response.status, response.statusText);
+                const result = await response.json();
+                console.log("API response body:", JSON.stringify(result, null, 2));
+
+                const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (text) {
+                    createMessageElement(text, 'bot');
                 } else {
                     createMessageElement("Sorry, I couldn't generate a response. Please try again.", 'bot');
                 }
@@ -413,9 +403,8 @@
 
         // Handle new chat
         newChatButton.addEventListener('click', () => {
-            chatMessages.innerHTML = '';
-            chatHistory = [{ role: 'model', parts: [{ text: 'Hello!' }] }];
-            createMessageElement('Hello!', 'bot');
+            chatMessages.innerHTML = '<div class="bot-message message">Hello! I\'m an AI assistant. How can I help you today? You can also upload an image for me to analyze.</div>';
+            chatHistory = [];
             uploadedImage = null;
             previewContainer.innerHTML = '';
             previewContainer.classList.add('hidden');
